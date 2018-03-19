@@ -1,0 +1,20 @@
+name: vision_camera
+description: A Flutter plugin for getting information about and controlling the
+  camera on Android and iOS. Supports previewing the camera feed and capturing images.
+  Based on camera plugin(https://github.com/flutter/plugins/tree/master/packages/camera)
+version: 0.1.0
+author: Jesper André Lyngesen Pedersen
+homepage: github.com/codenaut/vision_camera
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    androidPackage: com.codenaut.flutter.plugins.camera
+    pluginClass: VisionCameraPlugin
+
+environment:
+  sdk: ">=2.0.0-dev.28.0 <3.0.0"
+  flutter: ">=0.1.4 <2.0.0"
