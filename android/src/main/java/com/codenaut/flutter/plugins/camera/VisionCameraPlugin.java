@@ -17,6 +17,7 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
@@ -29,10 +30,9 @@ import android.util.SparseArray;
 import android.util.SparseIntArray;
 import android.view.Surface;
 
-import com.google.android.gms.vision.CameraSource;
+
 import com.google.android.gms.vision.Detector;
 import com.google.android.gms.vision.Frame;
-import com.google.android.gms.vision.MultiProcessor;
 import com.google.android.gms.vision.barcode.Barcode;
 import com.google.android.gms.vision.barcode.BarcodeDetector;
 import io.flutter.plugin.common.EventChannel;
@@ -55,6 +55,7 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class VisionCameraPlugin implements MethodCallHandler {
 
@@ -221,7 +222,8 @@ public class VisionCameraPlugin implements MethodCallHandler {
                   "codenaut.com/visionCameraPlugin/cameraEvents" + surfaceTexture.id());
           String cameraName = call.argument("cameraName");
           String resolutionPreset = call.argument("resolutionPreset");
-          Cam cam = new Cam(eventChannel, surfaceTexture, cameraName, resolutionPreset, result);
+          Map<String, Object> options =call.argument("options");
+          Cam cam = new Cam(eventChannel, surfaceTexture, cameraName, resolutionPreset, result, options);
           cams.put(cam.getTextureId(), cam);
           break;
         }
@@ -232,20 +234,11 @@ public class VisionCameraPlugin implements MethodCallHandler {
           result.success(null);
           break;
         }
-      case "capture":
-        {
-          Cam cam = getCamOfCall(call);
-          cam.capture((String) call.argument("path"), result);
-          break;
-        }
-      case "scan":
-        {
-          Cam cam = getCamOfCall(call);
-          cam.scan(result, (Integer) call.argument("barcodeTypes"),
-                  (Boolean)call.argument("autofocus"), (Boolean)call.argument("flash"),
-                  ((Number)call.argument("timeout")).longValue());
-          break;
-        }
+      case "capture": {
+        Cam cam = getCamOfCall(call);
+        cam.capture((String) call.argument("path"), result);
+        break;
+      }
       case "stop":
         {
           Cam cam = getCamOfCall(call);
@@ -304,15 +297,17 @@ public class VisionCameraPlugin implements MethodCallHandler {
     private boolean initialized = false;
     private Size captureSize;
     private Size previewSize;
+    private ImageReader barcodeImageReader;
     private BarcodeDetector barcodeDetector;
-    private CameraSource barcodeCameraSource;
+    private long barcodeReadInterval;
 
     Cam(
         final EventChannel eventChannel,
         final FlutterView.SurfaceTextureEntry textureEntry,
         final String cameraName,
         final String resolutionPreset,
-        final Result result) {
+        final Result result,
+        final Map<String, Object> options) {
 
       this.textureEntry = textureEntry;
       this.cameraName = cameraName;
@@ -340,6 +335,29 @@ public class VisionCameraPlugin implements MethodCallHandler {
         imageReader =
             ImageReader.newInstance(
                 captureSize.getWidth(), captureSize.getHeight(), ImageFormat.JPEG, 2);
+        barcodeImageReader =
+                ImageReader.newInstance(
+                        minPreviewSize.getWidth(), minPreviewSize.getHeight(), ImageFormat.YV12, 2);
+        if (options != null) {
+          barcodeReadInterval = 1000;
+          if (barcodeDetector != null) {
+            Log.i("vision_camera", "releasing old barcodeDetector");
+            barcodeDetector.release();
+          }
+          final int barcodeTypes = 0;
+          barcodeDetector =
+                  new BarcodeDetector.Builder(activity.getApplicationContext())
+                          .setBarcodeFormats(barcodeTypes)
+                          .build();
+          if (!barcodeDetector.isOperational()) {
+            result.error("DetectorError", "Failed to configure detector", null);
+            barcodeDetector.release();
+            return;
+          }
+          barcodeDetector.setProcessor(new BarcodeProcessor());
+          Log.i("vision_camera", "Barcode scanner set up");
+        }
+
         SurfaceTexture surfaceTexture = textureEntry.surfaceTexture();
         surfaceTexture.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
         previewSurface = new Surface(surfaceTexture);
@@ -404,6 +422,10 @@ public class VisionCameraPlugin implements MethodCallHandler {
                   List<Surface> surfaceList = new ArrayList<>();
                   surfaceList.add(previewSurface);
                   surfaceList.add(imageReader.getSurface());
+                  if (barcodeImageReader != null) {
+                    surfaceList.add(barcodeImageReader.getSurface());
+                  }
+
 
                   try {
                     cameraDevice.createCaptureSession(
@@ -432,6 +454,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
                   } catch (CameraAccessException e) {
                     result.error("cameraAccess", e.getMessage(), null);
                   }
+
                 }
 
                 @Override
@@ -481,33 +504,77 @@ public class VisionCameraPlugin implements MethodCallHandler {
         }
       }
     }
+    class BarcodeProcessor implements Detector.Processor<Barcode> {
+
+      @Override
+      public void release() {
+
+      }
+
+      @Override
+      public void receiveDetections(Detector.Detections<Barcode> detections) {
+        final List<Map<String, Object>> barCodes = processBarcodes(detections.getDetectedItems());
+        if (!barCodes.isEmpty()) {
+          final Map<String, Object> results = new HashMap<>();
+          results.put("eventType", "barCodes");
+          results.put("barCodes", barCodes);
+          eventSink.success(results);
+        }
+      }
+    }
 
     void start() {
       if (!initialized) {
         return;
       }
+
+      if (barcodeImageReader != null) {
+        final AtomicLong lastRead = new AtomicLong(0);
+
+        barcodeImageReader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
+          @Override
+          public void onImageAvailable(ImageReader imageReader) {
+            long ts = lastRead.get();
+            long now = System.currentTimeMillis();
+            if (now - ts < barcodeReadInterval) {
+              imageReader.acquireLatestImage().close();
+            } else {
+              lastRead.getAndSet(now);
+              detectBarCodes(imageReader);
+            }
+          }
+        }, null);
+      }
       try {
         final CaptureRequest.Builder previewRequestBuilder =
             cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+
         previewRequestBuilder.set(
             CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
         previewRequestBuilder.addTarget(previewSurface);
+        if (barcodeImageReader != null) {
+          previewRequestBuilder.addTarget(barcodeImageReader.getSurface());
+        }
         CaptureRequest previewRequest = previewRequestBuilder.build();
         cameraCaptureSession.setRepeatingRequest(
-            previewRequest,
-            new CameraCaptureSession.CaptureCallback() {
-              @Override
-              public void onCaptureBufferLost(
-                  @NonNull CameraCaptureSession session,
-                  @NonNull CaptureRequest request,
-                  @NonNull Surface target,
-                  long frameNumber) {
-                super.onCaptureBufferLost(session, request, target, frameNumber);
-                if (eventSink != null) {
-                  eventSink.success("lost buffer");
-                }
-              }
-            },
+                previewRequest,
+                new CameraCaptureSession.CaptureCallback() {
+
+                  @Override
+                  public void onCaptureCompleted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
+                    super.onCaptureCompleted(session, request, result);
+
+                    //Log.i("vision_camera", "Capture complete");
+                  }
+
+                  @Override
+                  public void onCaptureBufferLost(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull Surface target, long frameNumber) {
+                    super.onCaptureBufferLost(session, request, target, frameNumber);
+                    if (eventSink != null) {
+                      eventSink.success("lost buffer");
+                    }
+                  }
+                },
             null);
       } catch (CameraAccessException exception) {
         Map<String, String> event = new HashMap<>();
@@ -571,84 +638,49 @@ public class VisionCameraPlugin implements MethodCallHandler {
       }
     }
 
-    class BarcodeProcessor implements Detector.Processor<Barcode> {
 
-      final Result result;
 
-      BarcodeProcessor(Result result) {
-        this.result = result;
+    private List<Map<String, Object>> processBarcodes(SparseArray<Barcode> barcodes) {
+      final List<Map<String, Object>> results = new LinkedList<>();
+      for (int i = 0; i < barcodes.size(); i++) {
+        final Barcode b = barcodes.valueAt(i);
+        Log.d("camera_vision", "Detected some sort of barcode: " + b.rawValue);
+        final Map<String, Object> r = new HashMap<>();
+        r.put("rawValue", b.rawValue);
+        r.put("format", b.format);
+        final Map<String, Object> bbox = new HashMap<>();
+        final Rect bb = b.getBoundingBox();
+        bbox.put("top", bb.top);
+        bbox.put("bottom", bb.bottom);
+        bbox.put("left", bb.left);
+        bbox.put("right", bb.right);
+        r.put("boundingBox", bbox);
+        results.add(r);
       }
-
-      @Override
-      public void release() {
-
+      if (!results.isEmpty()) {
+        Log.d("camera_vision", "Returning results: " + results);
       }
-
-      @Override
-      public void receiveDetections(Detector.Detections<Barcode> detections) {
-
-        SparseArray<Barcode> barcodes = detections.getDetectedItems();
-        final List<Map<String, Object>> results = new LinkedList<>();
-        for (int i = 0; i < barcodes.size(); i++) {
-          final Barcode b = barcodes.valueAt(i);
-          Log.d("camera_vision", "Detected some sort of barcode: " + b.rawValue);
-          final Map<String, Object> r = new HashMap<>();
-          r.put("rawValue", b.rawValue);
-          r.put("format", b.format);
-          final Map<String, Object> bbox = new HashMap<>();
-          final Rect bb = b.getBoundingBox();
-          bbox.put("top", bb.top);
-          bbox.put("bottom", bb.bottom);
-          bbox.put("left", bb.left);
-          bbox.put("right", bb.right);
-          r.put("boundingBox", bbox);
-          results.add(r);
-        }
-        if (!results.isEmpty()) {
-          this.result.success(results);
-          try {
-            Cam.this.barcodeCameraSource.stop();
-            Cam.this.barcodeDetector.release();
-          } finally {
-            Cam.this.barcodeCameraSource.release();
-            Cam.this.barcodeDetector.release();
-          }
+      return results;
+    }
+    private void detectBarCodes(ImageReader imageReader) {
+      boolean success = false;
+      try (Image image = imageReader.acquireLatestImage()) {
+        final Image.Plane plane = image.getPlanes()[0];
+        final ByteBuffer buf = plane.getBuffer();
+        final Frame frame = new Frame.Builder()
+                .setImageData(buf, imageReader.getWidth(), imageReader.getHeight(),
+                        imageReader.getImageFormat())
+                .build();
+        barcodeDetector.receiveFrame(frame);
+        success = true;
+      } catch (Exception e) {
+        if (!success) {
+          e.printStackTrace();
+          throw e;
         }
       }
     }
 
-    void scan(final Result result, int barcodeTypes, boolean autoFocus, boolean flash, long timeout) {
-      if (this.barcodeDetector != null) {
-        this.barcodeDetector.release();
-      }
-      this.barcodeDetector =
-              new BarcodeDetector.Builder(activity.getApplicationContext())
-                      .setBarcodeFormats(barcodeTypes)
-                      .build();
-      if(!barcodeDetector.isOperational()){
-        result.error("DetectorError", "Failed to configure detector", null);
-        barcodeDetector.release();
-        return;
-      }
-      if (this.barcodeCameraSource != null) {
-        this.barcodeCameraSource.release();
-      }
-
-      this.barcodeCameraSource = new CameraSource.Builder(activity.getApplicationContext(), barcodeDetector)
-              .setFacing(this.facingFront?CameraSource.CAMERA_FACING_FRONT:CameraSource.CAMERA_FACING_BACK)
-              .setRequestedFps(15.0f)
-              .build();
-
-      try {
-        barcodeDetector.setProcessor(new BarcodeProcessor(result));
-        barcodeCameraSource.start();
-
-      } catch (IOException e) {
-        barcodeDetector.release();
-        barcodeCameraSource.release();
-        result.error(e.getClass().getSimpleName(), e.getMessage(), null);
-      }
-    }
 
     void capture(String path, final Result result) {
       final File file = new File(path);

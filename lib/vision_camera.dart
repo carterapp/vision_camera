@@ -171,9 +171,10 @@ class CameraController extends ValueNotifier<CameraValue> {
   int _textureId;
   bool _disposed = false;
   StreamSubscription<Map<String, dynamic>> _eventSubscription;
+  Map<String, dynamic> options;
   Completer<Null> _creatingCompleter;
 
-  CameraController(this.description, this.resolutionPreset)
+  CameraController(this.description, this.resolutionPreset, this.options)
       : super(const CameraValue.uninitialized());
 
   /// Initializes the camera on the device.
@@ -190,6 +191,7 @@ class CameraController extends ValueNotifier<CameraValue> {
         <String, dynamic>{
           'cameraName': description.name,
           'resolutionPreset': serializeResolutionPreset(resolutionPreset),
+          'options': options
         },
       );
       _textureId = reply['textureId'];
@@ -245,41 +247,6 @@ class CameraController extends ValueNotifier<CameraValue> {
     }
   }
   
-  /// Scans for a barcode and waits for result.
-  /// If a path is provides the image that contains
-  /// the barcode is saved to here.
-  /// 
-  /// If no types are given, all barcode types are detected
-  ///
-  /// Timeout is in milliseconds
-  ///
-  /// A path can for example be obtained using
-  /// [path_provider](https://pub.dartlang.org/packages/path_provider).
-  ///
-  /// Throws a [CameraException] if the capture fails.
-  Future<Null> scan(Map<String, dynamic> options) async {
-    if (!value.initialized || _disposed) {
-      throw new CameraException(
-        'Uninitialized capture()',
-        'scan() was called on uninitialized CameraController',
-      );
-    }
-    try {
-      await _channel.invokeMethod(
-        'scan',
-        <String, dynamic>{'textureId': _textureId, 
-            'timeout': def(options['timeout'], 0),
-            'barcodeTypes': def(options['barcodeTypes'],0),
-            'autofocus': def(options['autofocus'], true),
-            'flash': def(options['flash'], false),
-            'path': options['path']},
-      );
-    } on PlatformException catch (e) {
-      throw new CameraException(e.code, e.message);
-    }
-  }
-
-
   void _applyStartStop() {
     if (value.initialized && !_disposed) {
       if (value.isStarted) {
