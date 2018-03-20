@@ -48,9 +48,8 @@ CameraLensDirection _parseCameraLensDirection(String string) {
 Future<List<CameraDescription>> availableCameras() async {
   try {
     final List<dynamic> cameras = await _channel.invokeMethod('list');
-    return cameras
-        .cast<Map<String, dynamic>>()
-        .map((Map<String, dynamic> camera) {
+    return cameras .cast<dynamic>()
+        .map((dynamic camera) {
       return new CameraDescription(
         name: camera['name'],
         lensDirection: _parseCameraLensDirection(camera['lensFacing']),
@@ -158,6 +157,7 @@ class CameraValue {
   }
 }
 
+typedef void BarcodeCallback(List<dynamic> barcodes);
 /// Controls a device camera.
 ///
 /// Use [availableCameras] to get a list of available cameras.
@@ -170,9 +170,10 @@ class CameraController extends ValueNotifier<CameraValue> {
   final ResolutionPreset resolutionPreset;
   int _textureId;
   bool _disposed = false;
-  StreamSubscription<Map<String, dynamic>> _eventSubscription;
+  StreamSubscription<dynamic> _eventSubscription;
   Map<String, dynamic> options;
   Completer<Null> _creatingCompleter;
+  Function onBarcodeRead;
 
   CameraController(this.description, this.resolutionPreset, this.options)
       : super(const CameraValue.uninitialized());
@@ -180,19 +181,20 @@ class CameraController extends ValueNotifier<CameraValue> {
   /// Initializes the camera on the device.
   ///
   /// Throws a [CameraException] if the initialization fails.
-  Future<Null> initialize() async {
+  Future<Null> initialize(Function onBarcodeRead) async {
     if (_disposed) {
       return;
     }
+    this.onBarcodeRead = onBarcodeRead;
     try {
       _creatingCompleter = new Completer<Null>();
-      final Map<String, dynamic> reply = await _channel.invokeMethod(
+      final Map reply = await _channel.invokeMethod(
         'create',
         <String, dynamic>{
           'cameraName': description.name,
           'resolutionPreset': serializeResolutionPreset(resolutionPreset),
           'options': options
-        },
+        }
       );
       _textureId = reply['textureId'];
       value = value.copyWith(
@@ -207,7 +209,7 @@ class CameraController extends ValueNotifier<CameraValue> {
       value = value.copyWith(errorDescription: e.message);
       throw new CameraException(e.code, e.message);
     }
-    _eventSubscription =
+    _eventSubscription = 
         new EventChannel('codenaut.com/visionCameraPlugin/cameraEvents$_textureId')
             .receiveBroadcastStream()
             .listen(_listener);
@@ -215,12 +217,20 @@ class CameraController extends ValueNotifier<CameraValue> {
   }
 
   void _listener(dynamic event) {
-    final Map<String, dynamic> map = event;
     if (_disposed) {
       return;
     }
-    if (map['eventType'] == 'error') {
-      value = value.copyWith(errorDescription: event['errorDescription']);
+    if (event is Map) {
+        if (event['eventType'] == 'barcodes') {
+            if (options != null) {
+                if (onBarcodeRead != null) {
+                    onBarcodeRead(event['barcodes']);
+                }
+
+            }
+        } else if (event['eventType'] == 'error') {
+            value = value.copyWith(errorDescription: event['errorDescription']);
+        }
     }
   }
 

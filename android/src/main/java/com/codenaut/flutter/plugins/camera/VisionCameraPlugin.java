@@ -65,7 +65,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
 
   @SuppressLint("UseSparseArrays")
   private static Map<Long, Cam> cams = new HashMap<>();
-
+  private static String LOG_TAG = "vision_camera";
   static {
     ORIENTATIONS.append(Surface.ROTATION_0, 0);
     ORIENTATIONS.append(Surface.ROTATION_90, 90);
@@ -193,6 +193,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
             CameraCharacteristics characteristics =
                 cameraManager.getCameraCharacteristics(cameraName);
             details.put("name", cameraName);
+
             @SuppressWarnings("ConstantConditions")
             int lens_facing = characteristics.get(CameraCharacteristics.LENS_FACING);
             switch (lens_facing) {
@@ -341,7 +342,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
         if (options != null) {
           barcodeReadInterval = 1000;
           if (barcodeDetector != null) {
-            Log.i("vision_camera", "releasing old barcodeDetector");
+            Log.i(LOG_TAG, "releasing old barcodeDetector");
             barcodeDetector.release();
           }
           final int barcodeTypes = 0;
@@ -355,7 +356,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
             return;
           }
           barcodeDetector.setProcessor(new BarcodeProcessor());
-          Log.i("vision_camera", "Barcode scanner set up");
+          Log.d(LOG_TAG, "Barcode scanner set up");
         }
 
         SurfaceTexture surfaceTexture = textureEntry.surfaceTexture();
@@ -513,11 +514,11 @@ public class VisionCameraPlugin implements MethodCallHandler {
 
       @Override
       public void receiveDetections(Detector.Detections<Barcode> detections) {
-        final List<Map<String, Object>> barCodes = processBarcodes(detections.getDetectedItems());
-        if (!barCodes.isEmpty()) {
+        final List<Map<String, Object>> barcodes = processBarcodes(detections.getDetectedItems());
+        if (!barcodes.isEmpty()) {
           final Map<String, Object> results = new HashMap<>();
-          results.put("eventType", "barCodes");
-          results.put("barCodes", barCodes);
+          results.put("eventType", "barcodes");
+          results.put("barcodes", barcodes);
           eventSink.success(results);
         }
       }
@@ -540,7 +541,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
               imageReader.acquireLatestImage().close();
             } else {
               lastRead.getAndSet(now);
-              detectBarCodes(imageReader);
+              detectBarcodes(imageReader);
             }
           }
         }, null);
@@ -559,14 +560,6 @@ public class VisionCameraPlugin implements MethodCallHandler {
         cameraCaptureSession.setRepeatingRequest(
                 previewRequest,
                 new CameraCaptureSession.CaptureCallback() {
-
-                  @Override
-                  public void onCaptureCompleted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
-                    super.onCaptureCompleted(session, request, result);
-
-                    //Log.i("vision_camera", "Capture complete");
-                  }
-
                   @Override
                   public void onCaptureBufferLost(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull Surface target, long frameNumber) {
                     super.onCaptureBufferLost(session, request, target, frameNumber);
@@ -644,7 +637,6 @@ public class VisionCameraPlugin implements MethodCallHandler {
       final List<Map<String, Object>> results = new LinkedList<>();
       for (int i = 0; i < barcodes.size(); i++) {
         final Barcode b = barcodes.valueAt(i);
-        Log.d("camera_vision", "Detected some sort of barcode: " + b.rawValue);
         final Map<String, Object> r = new HashMap<>();
         r.put("rawValue", b.rawValue);
         r.put("format", b.format);
@@ -658,11 +650,11 @@ public class VisionCameraPlugin implements MethodCallHandler {
         results.add(r);
       }
       if (!results.isEmpty()) {
-        Log.d("camera_vision", "Returning results: " + results);
+        Log.d(LOG_TAG, "Returning results: " + results);
       }
       return results;
     }
-    private void detectBarCodes(ImageReader imageReader) {
+    private void detectBarcodes(ImageReader imageReader) {
       boolean success = false;
       try (Image image = imageReader.acquireLatestImage()) {
         final Image.Plane plane = image.getPlanes()[0];
@@ -706,6 +698,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
           null);
 
       try {
+
         final CaptureRequest.Builder captureBuilder =
             cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
         captureBuilder.addTarget(imageReader.getSurface());
