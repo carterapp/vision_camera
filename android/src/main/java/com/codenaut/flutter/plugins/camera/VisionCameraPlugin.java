@@ -7,6 +7,7 @@ import android.app.Application;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
+import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
@@ -240,6 +241,11 @@ public class VisionCameraPlugin implements MethodCallHandler {
         cam.capture((String) call.argument("path"), result);
         break;
       }
+      case "flash": {
+        Cam cam = getCamOfCall(call);
+        cam.turnOnFlash((Boolean)call.argument("turnOn"), result);
+        break;
+      }
       case "stop":
         {
           Cam cam = getCamOfCall(call);
@@ -284,6 +290,8 @@ public class VisionCameraPlugin implements MethodCallHandler {
     }
   }
 
+
+
   private class Cam {
     private final FlutterView.SurfaceTextureEntry textureEntry;
     private CameraDevice cameraDevice;
@@ -301,7 +309,19 @@ public class VisionCameraPlugin implements MethodCallHandler {
     private ImageReader barcodeImageReader;
     private BarcodeDetector barcodeDetector;
     private long barcodeReadInterval;
+    private boolean turnOnFlash;
 
+    <T> T defaultValue(Map<String, Object> map, String key, T defVal){
+      if (map == null) {
+        return defVal;
+      }
+      final Object v = map.get(key);
+      if (v != null && defVal.getClass().isInstance(v)) {
+          return (T)v;
+      } else {
+        return defVal;
+      }
+    }
     Cam(
         final EventChannel eventChannel,
         final FlutterView.SurfaceTextureEntry textureEntry,
@@ -312,6 +332,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
 
       this.textureEntry = textureEntry;
       this.cameraName = cameraName;
+
       try {
         CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraName);
 
@@ -338,14 +359,14 @@ public class VisionCameraPlugin implements MethodCallHandler {
                 captureSize.getWidth(), captureSize.getHeight(), ImageFormat.JPEG, 2);
         barcodeImageReader =
                 ImageReader.newInstance(
-                        minPreviewSize.getWidth(), minPreviewSize.getHeight(), ImageFormat.YV12, 2);
+                        previewSize.getWidth(), previewSize.getHeight(), ImageFormat.YV12, 2);
         if (options != null) {
-          barcodeReadInterval = 1000;
+          barcodeReadInterval = defaultValue(options, "barcodeReadInterval", 500L);
           if (barcodeDetector != null) {
             Log.i(LOG_TAG, "releasing old barcodeDetector");
             barcodeDetector.release();
           }
-          final int barcodeTypes = 0;
+          final int barcodeTypes = defaultValue(options, "barcodeTypes", 0);
           barcodeDetector =
                   new BarcodeDetector.Builder(activity.getApplicationContext())
                           .setBarcodeFormats(barcodeTypes)
@@ -427,7 +448,6 @@ public class VisionCameraPlugin implements MethodCallHandler {
                     surfaceList.add(barcodeImageReader.getSurface());
                   }
 
-
                   try {
                     cameraDevice.createCaptureSession(
                         surfaceList,
@@ -505,11 +525,11 @@ public class VisionCameraPlugin implements MethodCallHandler {
         }
       }
     }
+
     class BarcodeProcessor implements Detector.Processor<Barcode> {
 
       @Override
       public void release() {
-
       }
 
       @Override
@@ -540,7 +560,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
             if (now - ts < barcodeReadInterval) {
               imageReader.acquireLatestImage().close();
             } else {
-              lastRead.getAndSet(now);
+              lastRead.set(now);
               detectBarcodes(imageReader);
             }
           }
@@ -552,7 +572,12 @@ public class VisionCameraPlugin implements MethodCallHandler {
 
         previewRequestBuilder.set(
             CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+              previewRequestBuilder.set(
+                    CaptureRequest.FLASH_MODE,
+                      turnOnFlash?CaptureRequest.FLASH_MODE_TORCH:CaptureRequest.FLASH_MODE_OFF);
+        Log.d(LOG_TAG, "Flash mode: " + turnOnFlash);
         previewRequestBuilder.addTarget(previewSurface);
+
         if (barcodeImageReader != null) {
           previewRequestBuilder.addTarget(barcodeImageReader.getSurface());
         }
@@ -673,6 +698,12 @@ public class VisionCameraPlugin implements MethodCallHandler {
       }
     }
 
+    void turnOnFlash(Boolean turnOn, final Result result) {
+      this.turnOnFlash = turnOn==null?!turnOnFlash:turnOn;
+      this.stop();
+      this.start();
+      result.success(null);
+    }
 
     void capture(String path, final Result result) {
       final File file = new File(path);

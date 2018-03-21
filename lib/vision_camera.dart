@@ -173,19 +173,30 @@ class CameraController extends ValueNotifier<CameraValue> {
   StreamSubscription<dynamic> _eventSubscription;
   Map<String, dynamic> options;
   Completer<Null> _creatingCompleter;
-  Function onBarcodeRead;
 
   CameraController(this.description, this.resolutionPreset, this.options)
       : super(const CameraValue.uninitialized());
 
+
+  Map<String, dynamic> sanitizeOptions(Map<String, dynamic> options) {
+      Set<String> validKeys = new Set<String>();
+
+      Map<String, dynamic> cleanOptions = new Map<String, dynamic>();
+      validKeys.forEach((k) {
+          dynamic v = options[k];
+          if (v != null) {
+              cleanOptions[k] = v;
+          }
+      });
+      return cleanOptions;
+  }
   /// Initializes the camera on the device.
   ///
   /// Throws a [CameraException] if the initialization fails.
-  Future<Null> initialize(Function onBarcodeRead) async {
+  Future<Null> initialize() async {
     if (_disposed) {
       return;
     }
-    this.onBarcodeRead = onBarcodeRead;
     try {
       _creatingCompleter = new Completer<Null>();
       final Map reply = await _channel.invokeMethod(
@@ -193,7 +204,7 @@ class CameraController extends ValueNotifier<CameraValue> {
         <String, dynamic>{
           'cameraName': description.name,
           'resolutionPreset': serializeResolutionPreset(resolutionPreset),
-          'options': options
+          'options': sanitizeOptions(options)
         }
       );
       _textureId = reply['textureId'];
@@ -222,7 +233,9 @@ class CameraController extends ValueNotifier<CameraValue> {
     }
     if (event is Map) {
         if (event['eventType'] == 'barcodes') {
+            print("Event: $event");
             if (options != null) {
+                Function onBarcodeRead = options['onBarcodeRead'];
                 if (onBarcodeRead != null) {
                     onBarcodeRead(event['barcodes']);
                 }
@@ -271,6 +284,23 @@ class CameraController extends ValueNotifier<CameraValue> {
         );
       }
     }
+  }
+
+  void flash(bool turnOn) {
+      if (!value.initialized || _disposed) {
+          throw new CameraException(
+                  'Uninitialized flash()',
+                  'flash() was called on uninitialized CameraController',
+                  );
+      }
+      try {
+          _channel.invokeMethod(
+                  'flash',
+                  <String, dynamic>{'textureId': _textureId, 'turnOn': turnOn},
+                  );
+      } on PlatformException catch (e) {
+          throw new CameraException(e.code, e.message);
+      }
   }
 
   /// Starts the preview.
