@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 
-final MethodChannel _channel = const MethodChannel('plugins.flutter.codenaut.com/vision_camera')
+final MethodChannel _channel = const MethodChannel(
+    'plugins.flutter.codenaut.com/vision_camera')
   ..invokeMethod('init');
 
 enum CameraLensDirection { front, back, external }
@@ -11,11 +12,11 @@ enum CameraLensDirection { front, back, external }
 enum ResolutionPreset { low, medium, high }
 
 dynamic def(dynamic value, dynamic defaultValue) {
-    if (value == null) {
-        return defaultValue;
-    } else {
-        return value;
-    }
+  if (value == null) {
+    return defaultValue;
+  } else {
+    return value;
+  }
 }
 
 String serializeResolutionPreset(ResolutionPreset resolutionPreset) {
@@ -48,7 +49,7 @@ CameraLensDirection _parseCameraLensDirection(String string) {
 Future<List<CameraDescription>> availableCameras() async {
   try {
     final List<dynamic> cameras = await _channel.invokeMethod('list');
-    return cameras .cast<dynamic>()
+    return cameras.cast<dynamic>()
         .map((dynamic camera) {
       return new CameraDescription(
         name: camera['name'],
@@ -63,6 +64,7 @@ Future<List<CameraDescription>> availableCameras() async {
 class CameraDescription {
   final String name;
   final CameraLensDirection lensDirection;
+
   CameraDescription({this.name, this.lensDirection});
 
   @override
@@ -86,6 +88,7 @@ class CameraDescription {
 class CameraException implements Exception {
   String code;
   String description;
+
   CameraException(this.code, this.description);
 
   @override
@@ -94,6 +97,7 @@ class CameraException implements Exception {
 
 class CameraPreview extends StatelessWidget {
   final CameraController controller;
+
   const CameraPreview(this.controller);
 
   @override
@@ -118,11 +122,10 @@ class CameraValue {
   /// Is `null` until initialized is `true`.
   final Size previewSize;
 
-  const CameraValue(
-      {this.isStarted,
-      this.initialized,
-      this.errorDescription,
-      this.previewSize});
+  const CameraValue({this.isStarted,
+    this.initialized,
+    this.errorDescription,
+    this.previewSize});
 
   const CameraValue.uninitialized() : this(isStarted: true, initialized: false);
 
@@ -157,7 +160,38 @@ class CameraValue {
   }
 }
 
-typedef void BarcodeCallback(List<dynamic> barcodes);
+class BoundingBox {
+  int top;
+  int bottom;
+  int right;
+  int left;
+
+  static BoundingBox fromMap(Map map) {
+    return new BoundingBox()
+      ..top = map['top']
+      ..bottom = map['bottom']
+      ..right = map['right']
+      ..left = map['left'];
+  }
+}
+
+class Barcode {
+  String rawValue;
+  int format;
+  BoundingBox boundingBox;
+
+
+  static Barcode fromMap(Map map) {
+    return new Barcode()
+      ..format = map["format"]
+      ..rawValue = map["rawValue"]
+      ..boundingBox = BoundingBox.fromMap(map['boundingBox']);
+  }
+
+}
+
+typedef void BarcodeCallback(Iterable<Barcode> barcodes);
+
 /// Controls a device camera.
 ///
 /// Use [availableCameras] to get a list of available cameras.
@@ -179,17 +213,18 @@ class CameraController extends ValueNotifier<CameraValue> {
 
 
   Map<String, dynamic> sanitizeOptions(Map<String, dynamic> options) {
-      Set<String> validKeys = new Set<String>();
+    Set<String> validKeys = new Set<String>();
 
-      Map<String, dynamic> cleanOptions = new Map<String, dynamic>();
-      validKeys.forEach((k) {
-          dynamic v = options[k];
-          if (v != null) {
-              cleanOptions[k] = v;
-          }
-      });
-      return cleanOptions;
+    Map<String, dynamic> cleanOptions = new Map<String, dynamic>();
+    validKeys.forEach((k) {
+      dynamic v = options[k];
+      if (v != null) {
+        cleanOptions[k] = v;
+      }
+    });
+    return cleanOptions;
   }
+
   /// Initializes the camera on the device.
   ///
   /// Throws a [CameraException] if the initialization fails.
@@ -200,12 +235,12 @@ class CameraController extends ValueNotifier<CameraValue> {
     try {
       _creatingCompleter = new Completer<Null>();
       final Map reply = await _channel.invokeMethod(
-        'create',
-        <String, dynamic>{
-          'cameraName': description.name,
-          'resolutionPreset': serializeResolutionPreset(resolutionPreset),
-          'options': sanitizeOptions(options)
-        }
+          'create',
+          <String, dynamic>{
+            'cameraName': description.name,
+            'resolutionPreset': serializeResolutionPreset(resolutionPreset),
+            'options': sanitizeOptions(options)
+          }
       );
       _textureId = reply['textureId'];
       value = value.copyWith(
@@ -220,8 +255,9 @@ class CameraController extends ValueNotifier<CameraValue> {
       value = value.copyWith(errorDescription: e.message);
       throw new CameraException(e.code, e.message);
     }
-    _eventSubscription = 
-        new EventChannel('codenaut.com/visionCameraPlugin/cameraEvents$_textureId')
+    _eventSubscription =
+        new EventChannel(
+            'codenaut.com/visionCameraPlugin/cameraEvents$_textureId')
             .receiveBroadcastStream()
             .listen(_listener);
     _creatingCompleter.complete(null);
@@ -232,18 +268,21 @@ class CameraController extends ValueNotifier<CameraValue> {
       return;
     }
     if (event is Map) {
-        if (event['eventType'] == 'barcodes') {
-            print("Event: $event");
-            if (options != null) {
-                Function onBarcodeRead = options['onBarcodeRead'];
-                if (onBarcodeRead != null) {
-                    onBarcodeRead(event['barcodes']);
-                }
-
-            }
-        } else if (event['eventType'] == 'error') {
-            value = value.copyWith(errorDescription: event['errorDescription']);
+      if (event['eventType'] == 'barcodes') {
+        if (options != null) {
+          Function onBarcodeRead = options['onBarcodeRead'];
+          if (onBarcodeRead != null) {
+            List values = (event['barcodes'] as List);
+            Iterable<Barcode> barcodes =
+            values.map((b) {
+              return Barcode.fromMap(b);
+            });
+            onBarcodeRead(barcodes);
+          }
         }
+      } else if (event['eventType'] == 'error') {
+        value = value.copyWith(errorDescription: event['errorDescription']);
+      }
     }
   }
 
@@ -269,7 +308,7 @@ class CameraController extends ValueNotifier<CameraValue> {
       throw new CameraException(e.code, e.message);
     }
   }
-  
+
   void _applyStartStop() {
     if (value.initialized && !_disposed) {
       if (value.isStarted) {
@@ -287,20 +326,20 @@ class CameraController extends ValueNotifier<CameraValue> {
   }
 
   void flash(bool turnOn) {
-      if (!value.initialized || _disposed) {
-          throw new CameraException(
-                  'Uninitialized flash()',
-                  'flash() was called on uninitialized CameraController',
-                  );
-      }
-      try {
-          _channel.invokeMethod(
-                  'flash',
-                  <String, dynamic>{'textureId': _textureId, 'turnOn': turnOn},
-                  );
-      } on PlatformException catch (e) {
-          throw new CameraException(e.code, e.message);
-      }
+    if (!value.initialized || _disposed) {
+      throw new CameraException(
+        'Uninitialized flash()',
+        'flash() was called on uninitialized CameraController',
+      );
+    }
+    try {
+      _channel.invokeMethod(
+        'flash',
+        <String, dynamic>{'textureId': _textureId, 'turnOn': turnOn},
+      );
+    } on PlatformException catch (e) {
+      throw new CameraException(e.code, e.message);
+    }
   }
 
   /// Starts the preview.

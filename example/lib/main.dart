@@ -57,7 +57,7 @@ class _CameraExampleHomeState extends State<CameraExampleHome> {
                 controller = null;
                 await tempController?.dispose();
                 controller =
-                    new CameraController(newValue, ResolutionPreset.high);
+                    new CameraController(newValue, ResolutionPreset.high, null);
                 await controller.initialize();
                 setState(() {});
               },
