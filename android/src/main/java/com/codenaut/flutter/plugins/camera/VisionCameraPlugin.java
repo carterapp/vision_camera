@@ -359,7 +359,7 @@ public class VisionCameraPlugin implements MethodCallHandler {
                 captureSize.getWidth(), captureSize.getHeight(), ImageFormat.JPEG, 2);
         barcodeImageReader =
                 ImageReader.newInstance(
-                        previewSize.getWidth(), previewSize.getHeight(), ImageFormat.YV12, 2);
+                        previewSize.getWidth(), previewSize.getHeight(), ImageFormat.YUV_420_888, 2);
         if (options != null) {
           barcodeReadInterval = defaultValue(options, "barcodeReadInterval", 500L);
           if (barcodeDetector != null) {
@@ -558,7 +558,10 @@ public class VisionCameraPlugin implements MethodCallHandler {
             long ts = lastRead.get();
             long now = System.currentTimeMillis();
             if (now - ts < barcodeReadInterval) {
-              imageReader.acquireLatestImage().close();
+              final Image latestImage = imageReader.acquireLatestImage();
+              if (latestImage != null) {
+                latestImage.close();
+              }
             } else {
               lastRead.set(now);
               detectBarcodes(imageReader);
@@ -679,14 +682,24 @@ public class VisionCameraPlugin implements MethodCallHandler {
       }
       return results;
     }
+    private byte[] convertYUV_420_888ToNV21(Image imgYUV420) {
+      // Convert YUV_420_888 data to NV21 (YUV_420_SP) so barcode reader can use it
+      final ByteBuffer buffer0 = imgYUV420.getPlanes()[0].getBuffer();
+      final ByteBuffer buffer2 = imgYUV420.getPlanes()[2].getBuffer();
+      final int buf0Size = buffer0.remaining();
+      final int buf2Size = buffer2.remaining();
+      final byte[] data = new byte[buf0Size + buf2Size];
+      buffer0.get(data, 0, buf0Size);
+      buffer2.get(data, buf0Size, buf2Size);
+      return data;
+    }
     private void detectBarcodes(ImageReader imageReader) {
       boolean success = false;
       try (Image image = imageReader.acquireLatestImage()) {
-        final Image.Plane plane = image.getPlanes()[0];
-        final ByteBuffer buf = plane.getBuffer();
+        byte[] imgData = convertYUV_420_888ToNV21(image);
         final Frame frame = new Frame.Builder()
-                .setImageData(buf, imageReader.getWidth(), imageReader.getHeight(),
-                        imageReader.getImageFormat())
+                .setImageData(ByteBuffer.wrap(imgData), imageReader.getWidth(), imageReader.getHeight(),
+                        ImageFormat.NV21)
                 .build();
         barcodeDetector.receiveFrame(frame);
         success = true;
